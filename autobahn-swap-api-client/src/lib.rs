@@ -3,8 +3,9 @@ use std::{collections::HashMap, time::Duration};
 use quote::{InternalQuoteRequest, QuoteRequest, QuoteResponse};
 use reqwest::{Client, Response};
 use serde::de::DeserializeOwned;
-use swap::{SwapRequest, SwapResponse, SwapIxResponse};
+use swap::{SwapRequest, SwapResponse, SwapIxResponse, SwapIxResponseInternal};
 use thiserror::Error;
+use anyhow;
 
 pub mod quote;
 pub mod route_plan_with_metadata;
@@ -27,6 +28,8 @@ pub enum ClientError {
     },
     #[error("Failed to deserialize response: {0}")]
     DeserializationError(#[from] reqwest::Error),
+    #[error("Failed to convert API response: {0}")]
+    ConversionError(#[from] anyhow::Error),
 }
 
 async fn check_is_success(response: Response) -> Result<Response, ClientError> {
@@ -84,7 +87,6 @@ impl JupiterSwapApiClient {
             .json(swap_request)
             .send()
             .await?;
-        println!("Response: {:#?}", response);
         check_status_code_and_deserialize(response).await
     }
 
@@ -97,6 +99,18 @@ impl JupiterSwapApiClient {
             .json(swap_request)
             .send()
             .await?;
-        check_status_code_and_deserialize::<SwapIxResponse>(response).await
+
+        let response = check_is_success(response).await?;
+
+        let internal_response = response
+            .json::<SwapIxResponseInternal>()
+            .await
+            .map_err(ClientError::DeserializationError)?;
+
+        let public_response = internal_response
+            .try_into()
+            .map_err(ClientError::ConversionError)?;
+
+        Ok(public_response)
     }
 }
